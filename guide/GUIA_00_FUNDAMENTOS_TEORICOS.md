@@ -194,10 +194,10 @@ Leia as notas do curso **CS231n de Stanford**:
 
 Antes de avançar para o [GUIA_01_NUMPY_CV.md](GUIA_01_NUMPY_CV.md), verifique se você consegue responder mentalmente a estas 5 perguntas:
 
-- [ ] Sei explicar por que uma imagem colorida no PyTorch precisa ter 4 dimensões $(B, C, H, W)$?
+- [X] Sei explicar por que uma imagem colorida no PyTorch precisa ter 4 dimensões $(B, C, H, W)$?
 - [X] Sei por que a derivada aponta para onde o erro sobe e por que subtraímos o gradiente na atualização?
 - [X] Sei por que usamos ReLU em vez de apenas multiplicar matrizes sequencialmente?
-- [ ] Entendo que uma camada de Convolução é apenas um filtro deslizando e calculando produtos escalares locais?
-- [ ] Sei a diferença conceitual entre classificar a imagem inteira (ResNet) e localizar caixas retangulares (YOLO)?
+- [X] Entendo que uma camada de Convolução é apenas um filtro deslizando e calculando produtos escalares locais?
+- [X] Sei a diferença conceitual entre classificar a imagem inteira (ResNet) e localizar caixas retangulares (YOLO)?
 
 Se você respondeu **sim** a essas 5 perguntas, sua base teórica está 100% pronta para iniciar os guias práticos e a pesquisa em Visão Computacional!

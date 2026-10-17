@@ -1,10 +1,54 @@
 # 📙 Guia Técnico: PyTorch para Visão Computacional (Os 20% Fundamentais)
 > **Projeto Âncora:** Diagnóstico de Patologias em Folhas e Culturas Agrícolas (AgroVision)  
-> **Objetivo:** Dominar a arquitetura convolucional, o fluxo de autograd, o treinamento científico e o diagnóstico de modelos em PyTorch com rigor acadêmico.
+> **Objetivo:** Dominar a arquitetura convolucional, a organização de software modular, o fluxo de autograd e o treinamento científico em PyTorch com rigor acadêmico.
 
 ---
 
-## 1. O Motor Matemático: Tensores, Autograd e Dispositivos
+## 1. Engenharia de Software: Estrutura Profissional de um Projeto em PyTorch
+
+Projetos amadores de Deep Learning costumam sofrer da *"Síndrome do Jupyter Notebook"*: misturam carregamento de arquivos, definição de redes neurais, loop de treinamento e interface gráfica em um único arquivo gigantesco ou copiam e colam classes de rede de um script para o outro.
+
+Em projetos profissionais e de pesquisa séria, aplicamos o princípio de **Separação de Responsabilidades (SoC - Separation of Concerns)** e o princípio **DRY (*Don't Repeat Yourself*)** com uma arquitetura modular limpa:
+
+```text
+agrovision/
+│
+├── config.py                 # 1. Configurações Globais e Hiperparâmetros
+│                             #    (LR, Batch Size, Épocas, Caminhos, Seed, Device)
+│
+├── src/                      # 2. Pacote Central (Lógica Reutilizável)
+│   ├── __init__.py
+│   │
+│   ├── models/               # Camada de Modelos (Arquiteturas Puras)
+│   │   ├── __init__.py
+│   │   ├── simple_cnn.py     # Definição ÚNICA da SimpleCNN (nn.Module)
+│   │   └── resnet_custom.py  # Adaptações de Transfer Learning
+│   │
+│   ├── data/                 # Camada de Dados (I/O e Pré-Processamento)
+│   │   ├── __init__.py
+│   │   ├── dataset.py        # Classes CustomDataset e Loaders
+│   │   └── transforms.py     # Pipelines de Data Augmentation
+│   │
+│   └── engine/               # Camada de Execução (O Motor de Treino e Predição)
+│       ├── __init__.py
+│       ├── trainer.py        # Funções train_one_epoch() e evaluate()
+│       └── predictor.py      # Função limpa de inferência para produção
+│
+├── train.py                  # 3. Ponto de Entrada de Treino (Orquestrador CLI)
+├── app.py                    # 4. Ponto de Entrada da Interface (Streamlit)
+│                             #    (Apenas importa de src/ e desenha a tela)
+└── requirements.txt
+```
+
+### As 4 Regras de Ouro dessa Arquitetura:
+1. **`models/` não sabe de onde vêm os dados:** A classe `nn.Module` só recebe um Tensor `(B, C, H, W)` e devolve Logits. Ela não abre arquivos, não lê CSV e não sabe o que é Streamlit.
+2. **`data/` não sabe qual modelo vai rodar:** Ele só se preocupa em ler imagens do disco, aplicar transformações (`transforms`) e entregar lotes organizados via `DataLoader`.
+3. **`engine/` é o maestro:** Ele importa o modelo de `models/`, os dados de `data/`, executa o loop `forward -> loss -> backward -> step` e salva o arquivo de pesos `.pth`.
+4. **`app.py` nunca redeclara redes neurais:** Ele apenas importa a classe de `src.models` e a função de predição de `src.engine.predictor`. Se você alterar a rede amanhã, o `app.py` continua funcionando sem precisar mexer em uma única linha!
+
+---
+
+## 2. O Motor Matemático: Tensores, Autograd e Dispositivos
 
 O PyTorch se diferencia de bibliotecas de álgebra linear clássica por duas propriedades:
 1. **Aceleração em Hardware:** Tensores podem ser movidos instantaneamente entre CPU e GPU/VRAM.
@@ -29,7 +73,7 @@ with torch.no_grad(): # Economiza até 70% de memória RAM/VRAM!
 
 ---
 
-## 2. Aritmética e Intuição de Convoluções 2D (`nn.Conv2d`)
+## 3. Aritmética e Intuição de Convoluções 2D (`nn.Conv2d`)
 
 Em Machine Learning tradicional com dados tabulares, cada neurônio possui um peso para cada coluna. Se aplicássemos uma camada densa (`Linear`) diretamente em uma imagem $224 \times 224 \times 3$, seriam necessários mais de **150.000 pesos por neurônio**, explodindo o número de parâmetros e causando *overfitting* imediato.
 
@@ -55,7 +99,7 @@ Onde:
 
 ---
 
-## 3. O Arsenal de Camadas Convolucionais
+## 4. O Arsenal de Camadas Convolucionais
 
 ```python
 import torch.nn as nn
@@ -79,25 +123,38 @@ relu = nn.ReLU(inplace=True)
 pool = nn.MaxPool2d(kernel_size=2, stride=2)
 
 # 5. nn.AdaptiveAvgPool2d: O Segredo da Flexibilidade
-# Transforma qualquer mapa de ativação (não importa o tamanho da foto) em um tamanho fixo (ex: 1x1 ou 7x7)
+# Transforma qualquer mapa de ativação em um tamanho fixo (ex: 1x1 ou 7x7)
 # É o que permite redes modernas aceitarem imagens de tamanhos diferentes!
 adapt_pool = nn.AdaptiveAvgPool2d((1, 1))
 ```
 
 ---
 
-## 4. Arquitetura Modular Completa com `nn.Module`
+## 5. Arquitetura Modular e Rastreamento de Dimensões (*Shape Tracking*)
 
-Em pesquisa científica, estruturamos a rede dividindo-a em duas partes claras:
-1. **`self.features`:** Extrator convolucional de características visuais.
-2. **`self.classifier`:** Classificador denso (MLP) que toma a decisão diagnóstica.
+Como saber exatamente qual número colocar no `in_features` da primeira camada `Linear` (`nn.Linear(?, 64)`)? 
+
+Basta acompanhar a evolução dimensional do tensor camada por camada:
+
+```
+Entrada:                    (Batch, 1,  28, 28)
+Conv1 (1 -> 16, pad=1):     (Batch, 16, 28, 28)
+MaxPool1 (stride=2):        (Batch, 16, 14, 14)  <- Metade do tamanho
+Conv2 (16 -> 32, pad=1):    (Batch, 32, 14, 14)
+MaxPool2 (stride=2):        (Batch, 32,  7,  7)  <- Metade do tamanho
+Flatten():                  (Batch, 32 * 7 * 7)  = (Batch, 1568)
+Linear (1568 -> 64):        (Batch, 64)
+```
+
+Por isso, na linha de declaração da camada densa, escrevemos:  
+`nn.Linear(32 * 7 * 7, 64)`. Esse cálculo não é um número mágico: é a multiplicação exata de **$\text{Canais} \times \text{Altura} \times \text{Largura}$** que saíram do último bloco convolucional!
 
 ```python
 class CNNClassificadoraDeFolhas(nn.Module):
     def __init__(self, num_classes=3): # Ex: [0=Saudável, 1=Ferrugem, 2=Mancha-Bacteriana]
         super(CNNClassificadoraDeFolhas, self).__init__()
         
-        # Bloco Extrator Convolucional
+        # 1. Bloco Extrator Convolucional
         self.features = nn.Sequential(
             # Bloco 1: 3 canais -> 32 canais (224x224 -> 112x112)
             nn.Conv2d(3, 32, kernel_size=3, padding=1),
@@ -119,9 +176,10 @@ class CNNClassificadoraDeFolhas(nn.Module):
         )
         
         # Reduz qualquer mapa espacial para 1x1 (Global Average Pooling)
+        # Transforma (Batch, 128, 28, 28) em (Batch, 128, 1, 1)
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
         
-        # Bloco Classificador Final
+        # 2. Bloco Classificador Final
         self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Linear(128 * 1 * 1, 64),
@@ -131,7 +189,6 @@ class CNNClassificadoraDeFolhas(nn.Module):
         )
 
     def forward(self, x):
-        # Fluxo para a frente
         x = self.features(x)
         x = self.global_pool(x)
         logits = self.classifier(x)
@@ -140,7 +197,7 @@ class CNNClassificadoraDeFolhas(nn.Module):
 
 ---
 
-## 5. Dataset e DataLoader com Otimização de Performance
+## 6. Dataset e DataLoader com Otimização de Performance
 
 Em projetos reais, os dados não cabem todos na memória RAM de uma vez. O `Dataset` ensina o PyTorch a ler **uma foto por vez do disco**, e o `DataLoader` cria os lotes em segundo plano usando múltiplos núcleos de CPU (*multiprocessing*).
 
@@ -162,7 +219,7 @@ class FolhasCSVDataset(Dataset):
         caminho = self.df.iloc[idx, 0]
         rotulo = int(self.df.iloc[idx, 1])
         
-        # Carregamento 'Lazy' (sob demanda)
+        # Carregamento sob demanda (Lazy Loading)
         img = Image.open(caminho).convert('RGB')
         
         if self.transform:
@@ -184,7 +241,7 @@ loader_treino = DataLoader(
 
 ---
 
-## 6. O Loop Científico de Treino, Validação e Diagnóstico de Curvas
+## 7. O Loop Científico de Treino, Validação e Diagnóstico de Curvas
 
 Este é o padrão rigoroso de treino com cálculo de métricas e prevenção de overfitting (*Early Stopping*):
 
@@ -263,7 +320,7 @@ def executar_treinamento(modelo, loader_treino, loader_val, epocas=10):
             print("  --> [SALVO] Novo melhor modelo alcançado!")
 ```
 
-### Como Diagnosticar as Curvas na Apresentação da IC:
+### Como Diagnosticar as Curvas na Apresentação Técnica:
 * **Overfitting (Sobreajuste):** `Treino Loss` continua caindo ($0.30 \to 0.15 \to 0.05$), mas `Val Loss` começa a subir ($0.40 \to 0.55 \to 0.70$). A rede decorou as folhas de treino. *Solução: aumentar Dropout, aplicar mais Data Augmentation ou usar pesos pré-treinados.*
 * **Underfitting (Subajuste):** Tanto `Treino Loss` quanto `Val Loss` permanecem altas. O modelo não tem capacidade de aprender. *Solução: aumentar número de camadas, treinar por mais épocas ou aumentar a taxa de aprendizado.*
 
@@ -273,6 +330,8 @@ def executar_treinamento(modelo, loader_treino, loader_val, epocas=10):
 
 | Problema | Solução PyTorch | Explicação Técnica |
 | :--- | :--- | :--- |
+| **Código duplicado e acoplado** | Arquitetura modular (`src/models`, `src/data`) | Isola modelo, dados e treino seguindo o princípio DRY |
+| **Dimensões quebrando no Linear** | Rastrear shapes: $(\text{Canais} \times H \times W)$ | Determina o número exato de entradas do `in_features` |
 | **Gradientes acumulando errado** | `optimizer.zero_grad()` | PyTorch por padrão soma gradientes a cada backward |
 | **VRAM estourando na avaliação** | `with torch.no_grad():` | Desliga o grafo de derivadas na validação |
 | **Dropout atuando no teste** | `modelo.eval()` | Garante predições determinísticas na inferência |
