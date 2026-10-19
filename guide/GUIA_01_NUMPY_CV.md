@@ -90,7 +90,7 @@ import numpy as np
 # PIL -> NumPy (uint8: 0 a 255, formato HWC)
 arr = np.array(img)
 
-# NumPy -> PIL (Permite voltar da matriz numérica para salvar ou exibir)
+# NumPy -> PIL (utePermite voltar da matriz numérica para salvar ou exibir)
 img_reconstruida = Image.fromarray(arr)
 ```
 
@@ -163,9 +163,11 @@ lesao_fungo = arr[50:180, 320:450, :]
 lesao_isolada = lesao_fungo.copy()
 ```
 
-### B) Máscara Booleana para Isolar Clorofila (Folha Verde vs Fundo)
+### B) Máscara Booleana de Cor (Segmentação por Predominância de Verde)
 
-Podemos usar álgebra booleana de arrays para descobrir onde a folha está, filtrando pixels onde o canal Verde (G) predomina sobre o Vermelho (R) e o Azul (B):
+Tecnicamente, essa máscara **não sabe o que é uma folha** — ela apenas localiza **onde existe predominância da cor verde** na foto (filtrando pixels onde o canal Verde $G$ é superior ao Vermelho $R$ e ao Azul $B$).
+
+Em um cenário controlado (ex: uma folha sobre uma bancada branca ou fundo neutro), essa regra permite isolar a área verde da folha. Porém, se houver grama, mato ou outro objeto verde na cena, a regra selecionará tudo indistintamente, pois filtros de cor são "cegos" para forma e contexto espacial:
 
 ```python
 # Separando os canais
@@ -173,16 +175,16 @@ R = arr_float[:, :, 0]
 G = arr_float[:, :, 1]
 B = arr_float[:, :, 2]
 
-# Condição para folha verde: Verde maior que Vermelho E maior que Azul
-mascara_folha = (G > R) & (G > B) & (G > 0.2) # Matriz booleana de True/False
+# Condição: Verde maior que Vermelho E maior que Azul (com intensidade mínima)
+mascara_verde = (G > R) & (G > B) & (G > 0.2) # Matriz booleana de True/False
 
-# Contando a porcentagem de área foliar saudável na imagem:
-percentual_verde = (np.count_nonzero(mascara_folha) / (mascara_folha.shape[0] * mascara_folha.shape[1])) * 100
-print(f"Área verde identificada: {percentual_verde:.2f}%")
+# Contando a porcentagem de pixels verdes na imagem:
+percentual_verde = (np.count_nonzero(mascara_verde) / (mascara_verde.shape[0] * mascara_verde.shape[1])) * 100
+print(f"Presença de pixels verdes na imagem: {percentual_verde:.2f}%")
 
-# Substituindo o fundo (tudo que não for folha) por preto:
-folha_segmentada = arr_float.copy()
-folha_segmentada[~mascara_folha] = 0.0 # O til (~) inverte a máscara booleana
+# Substituindo tudo o que não for verde por preto:
+imagem_segmentada = arr_float.copy()
+imagem_segmentada[~mascara_verde] = 0.0 # O til (~) inverte a máscara booleana
 ```
 
 ---
@@ -239,37 +241,7 @@ imagem_unica = np.squeeze(lote_1, axis=0)     # Retorna para (3, 400, 600)
 
 ---
 
-## 7. Calculando a Média e Desvio Padrão Reais do seu Dataset
-
-Em projetos de pesquisa agrícola, muitos desenvolvedores usam cegamente a média do ImageNet (`mean=[0.485, 0.456, 0.406]`). Mas o ImageNet é composto por carros, cachorros e prédios. Se você estiver trabalhando com café ou soja, as imagens são predominantemente verdes e marrons!
-
-Como calcular a média e desvio padrão exatos do seu dataset com NumPy:
-
-```python
-import glob
-
-caminhos = glob.glob("dataset_folhas/**/*.jpg", recursive=True)
-
-medias = []
-desvios = []
-
-for caminho in caminhos[:100]: # Amostra de 100 imagens
-    img_np = np.array(Image.open(caminho).convert('RGB')).astype(np.float32) / 255.0
-    # Média e desvio por canal (eixos 0 e 1 = Altura e Largura)
-    medias.append(img_np.mean(axis=(0, 1)))
-    desvios.append(img_np.std(axis=(0, 1)))
-
-media_dataset = np.mean(medias, axis=0)
-desvio_dataset = np.mean(desvios, axis=0)
-
-print("Média exata dos canais [R, G, B]:", media_dataset)
-print("Desvio padrão exato [R, G, B]:", desvio_dataset)
-# Use esses valores no torchvision.transforms.Normalize()!
-```
-
----
-
-## 8. A Ponte Zero-Copy: NumPy $\leftrightarrow$ PyTorch
+## 7. A Ponte Zero-Copy: NumPy $\leftrightarrow$ PyTorch
 
 Para evitar gargalos de processamento, a transferência entre NumPy e PyTorch pode ser feita sem copiar bytes na memória RAM:
 
@@ -293,12 +265,12 @@ predicoes_numpy = tensor_folha.detach().cpu().numpy()
 
 ## 📌 Checklist do Pesquisador em Visão Computacional (PIL & NumPy 80/20)
 
-| Problema                                         | Solução                                 | Por que é vital?                                            |
-| :----------------------------------------------- | :---------------------------------------- | :----------------------------------------------------------- |
-| **PNG com 4 canais (Alpha) quebrando CNN** | `Image.open(...).convert('RGB')`        | Descarta transparência e garante 3 canais exatos            |
-| **Confundir Largura e Altura**             | PIL: `(W, H)` vs NumPy: `(H, W)`      | Evita distorções no resize e recortes desalinhados         |
-| **Overflow de pixels**                     | `.astype(np.float32) / 255.0`           | Evita que valores $> 255$ reiniciem para zero em `uint8` |
-| **Padrão de canais errado**               | `np.transpose(arr, (2, 0, 1))`          | PyTorch só aceita $(C, H, W)$ para convoluções          |
-| **Matriz não contígua**                  | `np.ascontiguousarray(...)`             | Impede erros de ponteiro na GPU                              |
-| **Imagem individual rejeitada**            | `arr[np.newaxis, ...]`                  | Transforma imagem 3D no lote 4D $(1, C, H, W)$             |
-| **Fundo ruidoso atrapalhando**             | Máscaras booleanas `(G > R) & (G > B)` | Segmenta o tecido foliar e descarta solo/vaso                |
+| Problema                                         | Solução                                 | Por que é vital?                                                 |
+| :----------------------------------------------- | :---------------------------------------- | :---------------------------------------------------------------- |
+| **PNG com 4 canais (Alpha) quebrando CNN** | `Image.open(...).convert('RGB')`        | Descarta transparência e garante 3 canais exatos                 |
+| **Confundir Largura e Altura**             | PIL: `(W, H)` vs NumPy: `(H, W)`      | Evita distorções no resize e recortes desalinhados              |
+| **Overflow de pixels**                     | `.astype(np.float32) / 255.0`           | Evita que valores $> 255$ reiniciem para zero em `uint8`      |
+| **Padrão de canais errado**               | `np.transpose(arr, (2, 0, 1))`          | PyTorch só aceita $(C, H, W)$ para convoluções               |
+| **Matriz não contígua**                  | `np.ascontiguousarray(...)`             | Impede erros de ponteiro na GPU                                   |
+| **Imagem individual rejeitada**            | `arr[np.newaxis, ...]`                  | Transforma imagem 3D no lote 4D $(1, C, H, W)$                  |
+| **Fundo neutro com solo/bancada**          | Máscaras booleanas `(G > R) & (G > B)` | Filtra pixels verdes em cenários controlados (sem mato no fundo) |

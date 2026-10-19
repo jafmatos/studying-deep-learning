@@ -10,7 +10,18 @@
 ## 1. Por que Redes Neurais Comuns (FC) Falham com Imagens?
 > *"In CIFAR-10, images are only 32x32x3 [...], so a single neuron in the first layer would have 32x32x3 = 3,072 weights. [...] But clearly this does not scale to larger images. For example, an image of respectable size, e.g. 200x200x3, would lead to neurons that have 200x200x3 = 120,000 weights. Moreover, we would want several such neurons. Clearly, this full connectivity is wasteful and leads to severe overfitting."*
 
-* **Explicação:** Conectar cada pixel a cada neurônio em uma imagem de $200 \times 200$ pixels criaria centenas de milhões de pesos logo na primeira camada. A rede simplesmente decoraria os pixels do treino e falharia no teste (**Overfitting brutal**).
+* **Explicação Detalhada da Aritmética:**
+  * **Entradas (Pixels):** Uma imagem $200 \times 200 \times 3$ fornece **$120.000$ valores de entrada**.
+  * **Pesos por Neurônio:** Em uma camada totalmente conectada (`Linear`), cada neurônio individual precisa de $120.000$ pesos ($+ 1$ viés).
+  * **Multiplicação pelo Número de Neurônios (Hiperparâmetro):** Se você criar uma primeira camada simples com apenas $100$ neurônios, serão necessários:
+    $$(120.000 \times 100) + 100 = \mathbf{12.000.100} \text{ parâmetros treináveis!}$$
+  * Mais de 12 milhões de parâmetros apenas na primeira camada levam a **overfitting brutal** (a rede decora os pixels específicos do treino) e inviabilizam o treino de imagens maiores.
+
+> [!NOTE]
+> **O Contraste com Convoluções:**
+> Para essa mesma imagem de 3 canais, uma camada convolucional `nn.Conv2d(3, 32, kernel_size=3)` precisa de apenas:
+> $$32 \times (3 \times 3 \times 3 + 1) = \mathbf{896} \text{ parâmetros!}$$
+> 896 contra 12 milhões, com a vantagem de manter a integridade bidimensional e a invariância por translação.
 
 ---
 

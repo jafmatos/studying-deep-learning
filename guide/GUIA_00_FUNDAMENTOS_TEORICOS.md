@@ -145,10 +145,16 @@ $$
 y = \sigma(W \cdot x + b)
 $$
 
-* $x$ = Dados de entrada (pixels ou características).
-* $W$ = Pesos (*Weights*): a importância de cada pixel (aprendidos durante o treino).
-* $b$ = Viés (*Bias*): um termo independente para deslocar a ativação.
+* $x$ = Dados de entrada (pixels ou características numéricas).
+* $W$ = Pesos (*Weights*): coeficientes matemáticos ajustados durante o treino.
+* $b$ = Viés (*Bias*): termo independente para deslocar a ativação.
 * $\sigma$ = Função de Ativação Não-Linear.
+
+> [!IMPORTANT]
+> **A Distinção Fundamental: Entradas vs. Hiperparâmetros vs. Parâmetros**
+> * **Entradas ($x$):** O que a rede recebe (ex: $200 \times 200 \times 3 = 120.000$ pixels). Fixado pela câmera/dataset.
+> * **Hiperparâmetros (Você define):** Decisões arquiteturais tomadas antes do treino (ex: quantos neurônios na camada, quantos filtros convolucionais, taxa de aprendizado $\eta$, tamanho do lote $B$).
+> * **Parâmetros Aprendidos (A rede aprende):** Os valores de $W$ e $b$, otimizados dinamicamente via gradiente descendente.
 
 ### B) Por que precisamos de Funções de Ativação (ReLU)?
 
