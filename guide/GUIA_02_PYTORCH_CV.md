@@ -260,21 +260,27 @@ for epoca in range(10):
 #### O que cada um dos 5 passos faz:
 
 1. **`optimizer.zero_grad()`**:
+
    * *O que faz:* Zera o atributo `.grad` de todos os parâmetros.
    * *Por que é obrigatório:* No PyTorch, os gradientes são acumulativos por padrão (`w.grad += novo_grad`). Isso é útil quando acumulamos gradientes de lotes pequenos, mas se você esquecer essa linha no treino comum, os gradientes do lote anterior se somarão aos novos indefinidamente, explodindo os pesos da rede até virarem `NaN` (não-número).
 2. **`predicoes = modelo(x)`**:
+
    * *O que faz:* Alimenta as imagens no modelo e executa todas as camadas. Em segundo plano, o PyTorch grava em um grafo dinâmico cada operação aritmética realizada.
 3. **`loss = criterion(predicoes, y)`**:
+
    * *O que faz:* Compara as predições com as respostas reais `y` e devolve um tensor contendo um único número: o erro médio daquele lote.
 4. **`loss.backward()`**:
+
    * *O que faz:* O motor de diferenciação automática (**Autograd**) percorre o grafo computacional de trás para frente pela Regra da Cadeia. Para cada parâmetro $w$ da rede, ele calcula a derivada parcial $\frac{\partial \text{Loss}}{\partial w}$ e guarda esse resultado dentro do campo `w.grad`.
 5. **`optimizer.step()`**:
+
    * *O que faz:* Lê os valores armazenados em `w.grad` e aplica a fórmula do otimizador para corrigir o valor de cada peso:
 
    $$
    w_{\text{novo}} = w_{\text{antigo}} - \text{lr} \times \text{gradiente}
    $$
 6. **`loss.item()`**:
+
    * *O que faz:* O objeto `loss` é um tensor do PyTorch amarrado ao grafo de derivadas. O método `.item()` extrai o valor numérico primitivo puro do Python (`float`), desconectando-o do grafo para imprimir no terminal sem consumir memória VRAM desnecessariamente.
 
 ---
@@ -363,7 +369,9 @@ meu-projeto/
 
 ---
 
-## 3.1 O Painel de Configuração (`config.py`)
+## 3.1 O Painel de Configuração
+
+> 📁 **Arquivo:** `src/deep_learning/config.py`
 
 Em vez de espalhar caminhos de pastas e números mágicos pelo código, centralizamos tudo:
 
@@ -376,11 +384,15 @@ import torch
 # .parents[1] sobe dois níveis de diretório para chegar confiavelmente na raiz do projeto
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# Diretórios físicos
+# Diretórios físicos das partições do Dataset
 DATA_DIR = PROJECT_ROOT / "data"
+TRAIN_DATA_DIR = DATA_DIR / "Train"
+VALIDATION_DATA_DIR = DATA_DIR / "Validation"
+TEST_DATA_DIR = DATA_DIR / "Test"
+
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 
-# Hardware detectado
+# Hardware detectado (GPU via ROCm/CUDA ou CPU)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Hiperparâmetros de treinamento
@@ -392,11 +404,61 @@ NUM_EPOCHS = 20
 
 ---
 
-## 3.2 Ingestão de Dados: `Dataset` e `DataLoader` (`data/`)
+## 3.2 Ingestão de Dados: `transforms.py`, `dataset.py` e `DataLoader`
 
-### A) Dataset com Leitura Preguiçosa (`data/dataset.py`)
+### A) Os Pipelines de Transformação (PIL + NumPy Puro)
 
-Para resolver o problema de memória, criamos uma classe herdando de `torch.utils.data.Dataset`.Ela exige implementar dois métodos especiais do Python:
+> 📁 **Arquivo:** `src/deep_learning/data/transforms.py`
+
+As fotos no disco possuem resoluções variadas e pixels inteiros em $[0, 255]$. O PyTorch precisa de tensores uniformes $(3, 224, 224)$ com escala decimal $[0.0, 1.0]$. Fazemos isso diretamente com **PIL e NumPy**:
+
+> [!IMPORTANT]
+> **A Pegadinha dos Eixos:** O PIL e o NumPy organizam pixels no formato $(H, W, C)$ (Altura, Largura, Canais). No entanto, toda camada convolucional do PyTorch exige estritamente $(C, H, W)$ (Canais, Altura, Largura). A transposição `transpose(2, 0, 1)` é **obrigatória** antes de gerar o Tensor!
+
+```python
+import numpy as np
+import torch
+from PIL import Image, ImageOps
+from deep_learning.config import IMAGE_SIZE
+
+
+def train_transform(image: Image.Image) -> torch.Tensor:
+    """Pipeline de Treino: Redimensionamento proporcional (Center Crop) + Tensor (C, H, W)."""
+    # 1. PIL: Redimensiona mantendo a proporção original e corta o centro (sem achatar)
+    image = ImageOps.fit(image, size=IMAGE_SIZE, method=Image.Resampling.BILINEAR)
+
+    # 2. NumPy: Converte inteiros [0, 255] -> float32 [0.0, 1.0]
+    # Formato original do NumPy: (H, W, C) = (224, 224, 3)
+    arr = np.array(image, dtype=np.float32) / 255.0
+
+    # 3. NumPy: Reordena eixos de (H, W, C) -> (C, H, W) = (3, 224, 224)
+    arr = arr.transpose(2, 0, 1)
+
+    # 4. PyTorch: Converte a matriz NumPy em Tensor sem cópia desnecessária de memória
+    tensor = torch.from_numpy(arr)
+    return tensor
+
+
+def validation_transform(image: Image.Image) -> torch.Tensor:
+    """Pipeline de Validação: Determinístico, idêntico em resolução e escala."""
+    image = ImageOps.fit(image, size=IMAGE_SIZE, method=Image.Resampling.BILINEAR)
+    arr = np.array(image, dtype=np.float32) / 255.0
+    arr = arr.transpose(2, 0, 1)
+    return torch.from_numpy(arr)
+
+
+def test_transform(image: Image.Image) -> torch.Tensor:
+    """Pipeline de Teste: Idêntico à validação."""
+    return validation_transform(image)
+```
+
+---
+
+### B) Dataset com Leitura Preguiçosa
+
+> 📁 **Arquivo:** `src/deep_learning/data/dataset.py`
+
+Para evitar que a memória RAM do computador exploda carregando milhares de imagens de uma vez, criamos uma classe herdando de `torch.utils.data.Dataset`. Ela exige implementar dois métodos especiais do Python:
 
 * **`__len__(self)`:** Devolve a quantidade total de fotos catalogadas no disco.
 * **`__getitem__(self, idx)`:** Invocado na sintaxe `dataset[idx]`. Implementa o **Lazy Loading**: ele abre e processa **uma única imagem** no momento exato em que o lote precisa dela.
@@ -407,57 +469,95 @@ from PIL import Image
 from torch.utils.data import Dataset
 import torch
 
+from deep_learning.config import (
+    DATA_DIR,
+    TRAIN_DATA_DIR,
+    VALIDATION_DATA_DIR,
+    TEST_DATA_DIR,
+)
+from deep_learning.data.transforms import (
+    train_transform,
+    validation_transform,
+    test_transform,
+)
+
 class ImageFolderDataset(Dataset):
-    def __init__(self, root_dir: str | Path, transform=None):
+    def __init__(self, root_dir: str | Path = DATA_DIR, transform=None):
         self.root_dir = Path(root_dir)
         self.transform = transform
-      
-        # Mapeia as subpastas como nomes de classes (ex: 'ferrugem', 'saudavel')
+  
+        # Mapeia as subpastas como nomes de classes (ex: 'Healthy', 'Powdery', 'Rust')
         self.classes = sorted([d.name for d in self.root_dir.iterdir() if d.is_dir()])
-        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(self.classes)}
-      
+        self.class_to_index = {cls_name: i for i, cls_name in enumerate(self.classes)}
+  
         # Guarda apenas o caminho do arquivo e o índice da classe (NUNCA pixels em memória!)
         self.samples = []
         for cls_name in self.classes:
             folder = self.root_dir / cls_name
             for img_path in folder.glob("*.*"):
                 if img_path.suffix.lower() in [".jpg", ".jpeg", ".png"]:
-                    self.samples.append((img_path, self.class_to_idx[cls_name]))
+                    self.samples.append((img_path, self.class_to_index[cls_name]))
 
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
-        img_path, label = self.samples[idx]
-      
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, int]:
+        img_path, label = self.samples[index]
+  
         # Leitura sob demanda: abre a foto e converte para RGB (descarta canal alfa de PNG)
         image = Image.open(img_path).convert("RGB")
-      
+  
         if self.transform is not None:
             image = self.transform(image)
-          
+  
         return image, label
+
+
+# Instanciação das 3 partições passando o root_dir e o transform correspondente:
+train_dataset = ImageFolderDataset(root_dir=TRAIN_DATA_DIR, transform=train_transform)
+validation_dataset = ImageFolderDataset(root_dir=VALIDATION_DATA_DIR, transform=validation_transform)
+test_dataset = ImageFolderDataset(root_dir=TEST_DATA_DIR, transform=test_transform)
+
+print("Classes detectadas:", train_dataset.classes)
+# Saída: ['Healthy', 'Powdery', 'Rust'] (Mapeamento: 0, 1, 2 idêntico nas 3 partições)
+print(f"Amostras -> Treino: {len(train_dataset)} | Val: {len(validation_dataset)} | Teste: {len(test_dataset)}")
 ```
 
-### B) O `DataLoader` (O Gerente de Lotes)
+---
 
-O `DataLoader` recebe o dataset individual e empacota as amostras em tensores de lote `(Batch, C, H, W)` usando processos paralelos da CPU:
+### C) O `DataLoader` (O Gerente de Lotes)
+
+> 📁 **Arquivo:** `src/deep_learning/data/dataset.py` (ou `src/main.py`)
+
+O `DataLoader` recebe o dataset individual e empacota as amostras em lotes `(Batch, C, H, W)` usando subprocessos paralelos da CPU:
 
 ```python
 from torch.utils.data import DataLoader
+import torch
 
+# Loader de Treino: shuffle=True para embaralhar a cada época e evitar viés de ordem
 loader_treino = DataLoader(
-    dataset=dataset_treino,
+    dataset=train_dataset,
     batch_size=32,
-    shuffle=True,                        # Embaralha os índices a cada época para evitar viés sequencial
-    num_workers=2,                       # Cria 2 processos paralelos de CPU lendo fotos do disco
-    pin_memory=torch.cuda.is_available() # Aloca em memória RAM fixa, acelerando a cópia para a GPU via DMA
+    shuffle=True,
+    num_workers=2,
+    pin_memory=torch.cuda.is_available() # Acelera cópia direta da RAM para a VRAM da GPU via DMA
 )
 
+# Loader de Validação: shuffle=False para avaliação justa e reprodutiva
 loader_val = DataLoader(
-    dataset=dataset_val,
+    dataset=validation_dataset,
     batch_size=32,
-    shuffle=False,                       # Validação e teste NUNCA devem ser embaralhados
+    shuffle=False,
+    num_workers=2,
+    pin_memory=torch.cuda.is_available()
+)
+
+# Loader de Teste: shuffle=False para cálculo final das métricas
+loader_teste = DataLoader(
+    dataset=test_dataset,
+    batch_size=32,
+    shuffle=False,
     num_workers=2,
     pin_memory=torch.cuda.is_available()
 )
@@ -465,7 +565,9 @@ loader_val = DataLoader(
 
 ---
 
-## 3.3 A Rede Neural em Classe (`models/simple_cnn.py`)
+## 3.3 A Rede Neural em Classe
+
+> 📁 **Arquivo:** `src/deep_learning/models/simple_cnn.py`
 
 Ao herdar de `nn.Module`, temos total liberdade arquitetural e separamos claramente o extrator de características da cabeça de classificação:
 
@@ -477,7 +579,7 @@ class SimpleCNN(nn.Module):
     def __init__(self, in_channels: int = 3, num_classes: int = 3):
         # super().__init__() é OBRIGATÓRIO: inicializa o rastreador de parâmetros do PyTorch
         super().__init__()
-      
+  
         # 1. EXTRATOR DE ATRIBUTOS CONVOLUCIONAIS
         self.features = nn.Sequential(
             # Bloco 1: (B, 3, 224, 224) -> (B, 32, 112, 112)
@@ -485,7 +587,7 @@ class SimpleCNN(nn.Module):
             nn.BatchNorm2d(num_features=32), # Normaliza as médias dos canais, estabilizando o treino
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),
-          
+  
             # Bloco 2: (B, 32, 112, 112) -> (B, 64, 56, 56)
             nn.Conv2d(32, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(num_features=64),
@@ -498,10 +600,10 @@ class SimpleCNN(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2)
         )
-      
+  
         # 2. POOLING GLOBAL ADAPTATIVO: reduz qualquer dimensão espacial restante para (1 x 1)
         self.gap = nn.AdaptiveAvgPool2d((1, 1))
-      
+  
         # 3. CABEÇA DE CLASSIFICAÇÃO LINEAR
         self.classifier = nn.Sequential(
             nn.Flatten(),
@@ -522,7 +624,9 @@ class SimpleCNN(nn.Module):
 
 ---
 
-## 3.4 O Motor de Treinamento e Avaliação (`engine/trainer.py`)
+## 3.4 O Motor de Treinamento e Avaliação
+
+> 📁 **Arquivo:** `src/deep_learning/engine/trainer.py`
 
 No código de produção, desacoplamos o treino da avaliação e adicionamos o cálculo da **acurácia**:
 
@@ -556,11 +660,11 @@ def train_one_epoch(
 
         # Acumula a perda multiplicada pelo tamanho do lote para calcular a média exata da época
         running_loss += loss.item() * images.size(0)
-      
+  
         # torch.max(logits, dim=1): busca o índice da classe com a maior pontuação por linha
         # Descartamos as pontuações brutas com '_' e pegamos apenas os índices preditos (preds)
         _, preds = torch.max(logits, dim=1)
-      
+  
         # (preds == targets).sum().item(): conta quantas previsões foram exatamente corretas
         correct += (preds == targets).sum().item()
         total += targets.size(0)
@@ -624,7 +728,9 @@ modelo.eval()
 
 ---
 
-## 3.6 Inferência em Produção (`engine/predictor.py`)
+## 3.6 Inferência em Produção
+
+> 📁 **Arquivo:** `src/deep_learning/engine/predictor.py`
 
 Para classificar uma imagem avulsa vinda de uma interface web ou API:
 
@@ -656,7 +762,7 @@ def predict_single_image(
         # torch.softmax: converte logits em probabilidades percentuais que somam 1.0 (dim=1)
         # squeeze(0): remove a dimensão de lote unitária de volta -> vetor 1D
         probs = torch.softmax(logits, dim=1).squeeze(0)
-      
+  
     top_prob, top_idx = torch.max(probs, dim=0)
   
     return {
@@ -667,6 +773,140 @@ def predict_single_image(
             for cls, p in zip(class_names, probs)
         }
     }
+```
+
+---
+
+## 3.7 O Maestro do Projeto: Orquestração e Avaliação Final de Teste
+
+> 📁 **Arquivo:** `src/main.py`
+
+### 1. O que este arquivo faz?
+
+Ele é o ponto de entrada (*entry point*) da aplicação. Ele não define classes nem redes neurais novas; seu único papel é **importar e conectar** os módulos que construímos nas seções anteriores, orquestrando:
+
+1. A inicialização do hardware, modelo, função de perda e otimizador.
+2. O loop de épocas intercalando `train_one_epoch` e `evaluate` no conjunto de validação.
+3. O salvamento automático do melhor modelo (*checkpointing*) com base na acurácia de validação.
+4. A **avaliação cega final no conjunto de teste** (`test_data_loader`).
+
+### 2. A Tríplice Divisão: Treino vs. Validação vs. Teste
+
+Por que precisamos de três conjuntos separados e não apenas dois?
+
+| Conjunto                           | Papel no Ciclo de Vida                                                                                             | Atualiza Pesos?                          | Frequência de Uso                                              |
+| :--------------------------------- | :----------------------------------------------------------------------------------------------------------------- | :--------------------------------------- | :-------------------------------------------------------------- |
+| **Treino (Train)**           | Aprender padrões visuais (convoluções e pesos lineares).                                                        | **Sim** (via `loss.backward()`). | Todo lote de cada época.                                       |
+| **Validação (Validation)** | Avaliar generalização durante o treino e selecionar o melhor checkpoint (*early stopping* / *model saving*). | **Não** (apenas inferência).     | 1 vez ao final de cada época.                                  |
+| **Teste (Test)**             | Fornecer a métrica final imparcial de desempenho do modelo em produção.                                         | **Não** (apenas inferência).     | **Apenas 1 vez**, após o término de todo o treinamento. |
+
+> ⚠️ **Atenção Metodológica:**
+> Se você usar o conjunto de validação para escolher o melhor modelo e também para reportar o resultado final no seu relatório/artigo, seus números estarão **otimistas demais (viciados)**. Você indiretamente "calibrou" o modelo para ter bom desempenho naquele subconjunto de 60 imagens. O conjunto de teste (150 imagens) nunca deve influenciar nenhuma decisão de treino.
+
+---
+
+### 3. Código Completo de `src/main.py`
+
+```python
+import torch
+import torch.nn as nn
+
+from deep_learning.config import (
+    DEVICE,
+    LEARNING_RATE,
+    NUM_EPOCHS,
+    MODEL_SAVE_PATH,
+    CLASSES,
+)
+from deep_learning.data.dataset import (
+    train_data_loader,
+    validation_data_loader,
+    test_data_loader,
+)
+from deep_learning.models.simple_cnn import SimpleCNN
+from deep_learning.engine.trainer import train_one_epoch, evaluate
+from deep_learning.engine.predictor import predict_single_image
+from deep_learning.data.transforms import val_transform
+
+
+def main():
+    print(f"🚀 Iniciando pipeline no dispositivo: {DEVICE}")
+
+    # 1. INSTANCIAÇÃO DOS COMPONENTES
+    model = SimpleCNN(in_channels=3, num_classes=len(CLASSES)).to(DEVICE)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=LEARNING_RATE)
+
+    best_val_acc = 0.0
+
+    # 2. LOOP DE TREINAMENTO E VALIDAÇÃO
+    print("\n--- INÍCIO DO TREINAMENTO ---")
+    for epoch in range(NUM_EPOCHS):
+        # Treino (com atualização de gradientes)
+        train_loss, train_acc = train_one_epoch(
+            model=model,
+            data_loader=train_data_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            device=DEVICE,
+        )
+
+        # Validação (sem gradientes, apenas para checagem)
+        val_loss, val_acc = evaluate(
+            model=model,
+            data_loader=validation_data_loader,
+            criterion=criterion,
+            device=DEVICE,
+        )
+
+        print(
+            f"Época [{epoch + 1:02d}/{NUM_EPOCHS:02d}] | "
+            f"Treino Loss: {train_loss:.4f} - Acc: {train_acc:.2%} | "
+            f"Val Loss: {val_loss:.4f} - Acc: {val_acc:.2%}"
+        )
+
+        # 3. CHECKPOINT: Salva o modelo sempre que bater recorde de acurácia de validação
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), MODEL_SAVE_PATH)
+            print(f"  ⭐ Novo recorde de validação! Pesos salvos em: {MODEL_SAVE_PATH}")
+
+    print("\n--- FIM DO TREINAMENTO ---")
+
+    # 4. AVALIAÇÃO FINAL NO CONJUNTO DE TESTE (TEST DATASET)
+    print("\n🧪 Carregando o melhor checkpoint para avaliação final no CONJUNTO DE TESTE...")
+    best_model = SimpleCNN(in_channels=3, num_classes=len(CLASSES)).to(DEVICE)
+    best_model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location=DEVICE))
+
+    test_loss, test_acc = evaluate(
+        model=best_model,
+        data_loader=test_data_loader,
+        criterion=criterion,
+        device=DEVICE,
+    )
+
+    print(f"📊 Desempenho Real no Conjunto de Teste (150 imagens inéditas):")
+    print(f"   Test Loss: {test_loss:.4f}")
+    print(f"   Test Accuracy: {test_acc:.2%}")
+
+    # 5. TESTE DE INFERÊNCIA AVULSA (PRODUÇÃO)
+    # Pega a primeira imagem de teste para validar o motor de predição
+    sample_img_path = test_data_loader.dataset.samples[0][0]
+    resultado = predict_single_image(
+        image_path=sample_img_path,
+        model=best_model,
+        transform=val_transform,
+        class_names=CLASSES,
+        device=DEVICE,
+    )
+
+    print("\n🔎 Demonstração de Inferência com predictor.py:")
+    print(f"   Arquivo: {sample_img_path}")
+    print(f"   Diagnóstico: {resultado['classe']} ({resultado['confianca']:.2f}% de certeza)")
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 ---

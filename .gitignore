@@ -1,4 +1,8 @@
 guide/data
+data/Test/*
+data/Train/*
+data/Validation/*
+*.zip
 *.pth
 
 # Byte-compiled / optimized / DLL files

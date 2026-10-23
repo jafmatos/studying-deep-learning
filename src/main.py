@@ -1,33 +1,74 @@
+from collections.abc import Callable
+
 import torch
-import torch.nn as nn
+from torch import nn
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from deep_learning.config import DEVICE, LEARNING_RATE, MODEL_PATH, NUM_EPOCHS
+from deep_learning.data.dataset import (
+    test_data_loader,
+    train_data_loader,
+    validation_data_loader,
+)
+from deep_learning.engine.trainer import evaluate, train_one_epoch
+from deep_learning.models.simple_cnn import SimpleCNN
 
-x = torch.randn(16, 3, 224, 224).to(device)
-y = torch.randint(low=0, high=3, size=(16,), device=device).to(device)
 
-model = nn.Sequential(
-    nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3, stride=1, padding=1),
-    nn.ReLU(inplace=True),
-    nn.MaxPool2d(kernel_size=2, stride=2),
-    nn.AdaptiveAvgPool2d(output_size=(1, 1)),
-    nn.Flatten(),
-    nn.Linear(in_features=16, out_features=3)
-).to(device)
+def train_model(
+    model: nn.Module,
+    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    device: torch.device,
+):
+    optimizer = torch.optim.Adam(params=model.parameters(), lr=LEARNING_RATE)
 
-criterion = nn.CrossEntropyLoss()
+    best_loss: float | None = None
 
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    for epoch in range(NUM_EPOCHS):
+        epoch_loss, epoch_acc = train_one_epoch(
+            model,
+            data_loader=train_data_loader,
+            criterion=criterion,
+            optimizer=optimizer,
+            device=device,
+        )
 
-model.train()
+        eval_loss, eval_acc = evaluate(
+            model,
+            data_loader=validation_data_loader,
+            criterion=criterion,
+            device=device,
+        )
 
-for epoch in range(10):
-    optimizer.zero_grad()
+        if best_loss is None or eval_loss < best_loss:
+            best_loss = eval_loss
 
-    predictions = model(x)
-    loss = criterion(predictions, y)
+            torch.save(model.state_dict(), MODEL_PATH)
 
-    loss.backward()
-    optimizer.step()
+        print(f" Epoch {epoch + 1} ".center(60, "="))
+        print(f"Training Loss / Accuracy: {epoch_loss:.4f} / {epoch_acc:.2%}")
+        print(f"Validation Loss / Accuracy: {eval_loss:.4f} / {eval_acc:.2%}")
 
-    print(f"Época: {epoch + 1}, Perda: {loss.item():.4f}")
+
+def test_model(
+    model: nn.Module,
+    criterion: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    device: torch.device,
+):
+    test_loss, test_acc = evaluate(
+        model, data_loader=test_data_loader, criterion=criterion, device=device
+    )
+
+    print(" Final Validation ".center(60, "="))
+    print(f"Training Loss / Accuracy: {test_loss:.4f} / {test_acc:.2%}")
+
+
+if __name__ == "__main__":
+    model = SimpleCNN().to(DEVICE)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+    train_model(model, criterion=criterion, device=DEVICE)
+
+    trained_model = SimpleCNN().to(DEVICE)
+    trained_model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+
+    test_model(trained_model, criterion=criterion, device=DEVICE)
